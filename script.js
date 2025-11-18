@@ -476,10 +476,6 @@ function transitionToPhase2() {
 
     // Show tool selection UI
     document.getElementById('tool-ui').style.display = 'flex';
-    document.getElementById('info').innerHTML = `
-        <h2>Phase 2: Select a Tool</h2>
-        <p>Click a tool below to start cleaning!</p>
-    `;
 }
 
 // Add event listeners for Phase 1
@@ -512,13 +508,6 @@ function selectTool(toolName) {
     // Spawn new tool mesh
     activeTool = createToolMesh(toolName);
     scene.add(activeTool);
-
-    // Update info
-    document.getElementById('info').innerHTML = `
-        <h2>Tool: ${toolName}</h2>
-        <p>Move your mouse to position the tool</p>
-        <p style="font-size:10px; margin-top:5px;">Cleaning mechanics coming soon...</p>
-    `;
 }
 
 // Create 3D tool mesh based on type
