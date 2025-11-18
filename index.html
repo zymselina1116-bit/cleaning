@@ -9,8 +9,24 @@
 <body>
     <div id="canvas-container"></div>
     <div id="info">
-        <h2>Hozy Cleaning Room - Base Setup</h2>
-        <p>Mouse: Orbit | Scroll: Zoom</p>
+        <h2>Phase 1: Clean the Trash</h2>
+        <p>Click and drag trash to the bin!</p>
+    </div>
+
+    <!-- Tool Selection UI (hidden initially) -->
+    <div id="tool-ui">
+        <button class="tool-button" onclick="selectTool('Mop')">
+            <div class="tool-icon mop-icon">🧹</div>
+            <span>Mop</span>
+        </button>
+        <button class="tool-button" onclick="selectTool('Sponge')">
+            <div class="tool-icon sponge-icon">🧽</div>
+            <span>Sponge</span>
+        </button>
+        <button class="tool-button" onclick="selectTool('Brush')">
+            <div class="tool-icon brush-icon">🪥</div>
+            <span>Brush</span>
+        </button>
     </div>
 
     <script type="importmap">

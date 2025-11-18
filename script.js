@@ -192,10 +192,13 @@ const trashMaterial = new THREE.MeshStandardMaterial({
     metalness: 0.1
 });
 
+// Track all trash cubes for interaction
+const trashCubes = [];
+
 // Trash cubes scattered on floor
 function createTrashCube(x, z, size) {
     const geometry = new THREE.BoxGeometry(size, size, size);
-    const cube = new THREE.Mesh(geometry, trashMaterial);
+    const cube = new THREE.Mesh(geometry, trashMaterial.clone());
     cube.position.set(x, 0.15 + size / 2, z);
     cube.rotation.set(
         Math.random() * 0.3,
@@ -204,6 +207,11 @@ function createTrashCube(x, z, size) {
     );
     cube.castShadow = true;
     cube.receiveShadow = true;
+
+    // Mark as trash for raycaster
+    cube.userData.isTrash = true;
+    cube.userData.originalColor = 0x654321;
+    cube.userData.size = size;
 
     // Fake shadow beneath (ambient occlusion effect)
     const shadowGeometry = new THREE.CircleGeometry(size * 0.7, 16);
@@ -217,14 +225,20 @@ function createTrashCube(x, z, size) {
     shadow.rotation.x = -Math.PI / 2;
     objectsGroup.add(shadow);
 
+    // Link shadow to cube for cleanup
+    cube.userData.shadow = shadow;
+
     return cube;
 }
 
-objectsGroup.add(createTrashCube(-1, 1, 0.3));
-objectsGroup.add(createTrashCube(1.5, -0.5, 0.25));
-objectsGroup.add(createTrashCube(0.5, 1.5, 0.35));
-objectsGroup.add(createTrashCube(-0.5, -1, 0.2));
-objectsGroup.add(createTrashCube(2, 0.8, 0.28));
+// Create and track trash cubes
+trashCubes.push(createTrashCube(-1, 1, 0.3));
+trashCubes.push(createTrashCube(1.5, -0.5, 0.25));
+trashCubes.push(createTrashCube(0.5, 1.5, 0.35));
+trashCubes.push(createTrashCube(-0.5, -1, 0.2));
+trashCubes.push(createTrashCube(2, 0.8, 0.28));
+
+trashCubes.forEach(cube => objectsGroup.add(cube));
 
 // Green trash bin in back right corner
 const binGeometry = new THREE.CylinderGeometry(0.4, 0.5, 0.8, 8);
@@ -316,6 +330,271 @@ controls.enableKeys = false;
 // Set target to center of room
 controls.target.set(0, 1.5, 0);
 controls.update();
+
+// ========================
+// PHASE 1 - Trash Pickup System
+// ========================
+let currentPhase = 1;
+let remainingTrashCount = trashCubes.length;
+let selectedTrash = null;
+let isDragging = false;
+
+// Raycaster and mouse tracking
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const intersectionPoint = new THREE.Vector3();
+
+// Update mouse coordinates
+function onMouseMove(event) {
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    // If dragging trash, move it along floor plane
+    if (isDragging && selectedTrash) {
+        raycaster.setFromCamera(mouse, camera);
+        raycaster.ray.intersectPlane(floorPlane, intersectionPoint);
+
+        if (intersectionPoint) {
+            selectedTrash.position.x = intersectionPoint.x;
+            selectedTrash.position.z = intersectionPoint.z;
+            selectedTrash.position.y = 0.3; // Keep slightly above floor
+
+            // Update shadow position
+            if (selectedTrash.userData.shadow) {
+                selectedTrash.userData.shadow.position.x = intersectionPoint.x;
+                selectedTrash.userData.shadow.position.z = intersectionPoint.z;
+            }
+        }
+    }
+
+    // If in Phase 2, move active tool
+    if (currentPhase === 2 && activeTool) {
+        raycaster.setFromCamera(mouse, camera);
+        raycaster.ray.intersectPlane(floorPlane, intersectionPoint);
+
+        if (intersectionPoint) {
+            activeTool.position.copy(intersectionPoint);
+            activeTool.position.y = 0.5; // Keep tool above floor
+        }
+    }
+}
+
+// Handle mouse down (start dragging)
+function onMouseDown(event) {
+    if (currentPhase !== 1) return;
+
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(trashCubes);
+
+    if (intersects.length > 0) {
+        const clickedObject = intersects[0].object;
+
+        if (clickedObject.userData.isTrash) {
+            selectedTrash = clickedObject;
+            isDragging = true;
+            controls.enabled = false; // Disable orbit while dragging
+
+            // Highlight trash (slightly brighter)
+            selectedTrash.material.color.setHex(0x8b6239);
+        }
+    }
+}
+
+// Handle mouse up (stop dragging, check bin collision)
+function onMouseUp(event) {
+    if (currentPhase !== 1 || !selectedTrash) return;
+
+    isDragging = false;
+    controls.enabled = true;
+
+    // Check collision with trash bin
+    const trashBox = new THREE.Box3().setFromObject(selectedTrash);
+    const binBox = new THREE.Box3().setFromObject(bin);
+
+    if (trashBox.intersectsBox(binBox)) {
+        // Trash successfully thrown in bin!
+        removeTrash(selectedTrash);
+        remainingTrashCount--;
+
+        console.log(`Trash removed! Remaining: ${remainingTrashCount}`);
+
+        // Check if all trash is cleaned
+        if (remainingTrashCount === 0) {
+            transitionToPhase2();
+        }
+    } else {
+        // Reset color if not thrown in bin
+        selectedTrash.material.color.setHex(selectedTrash.userData.originalColor);
+    }
+
+    selectedTrash = null;
+}
+
+// Remove trash from scene
+function removeTrash(trash) {
+    // Small scale animation
+    const startScale = trash.scale.clone();
+    const animationDuration = 300; // ms
+    const startTime = Date.now();
+
+    function animateRemoval() {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(elapsed / animationDuration, 1);
+        const scale = 1 - progress;
+
+        trash.scale.copy(startScale).multiplyScalar(scale);
+
+        if (progress < 1) {
+            requestAnimationFrame(animateRemoval);
+        } else {
+            // Remove from scene
+            scene.remove(trash);
+            if (trash.userData.shadow) {
+                scene.remove(trash.userData.shadow);
+            }
+
+            // Remove from array
+            const index = trashCubes.indexOf(trash);
+            if (index > -1) {
+                trashCubes.splice(index, 1);
+            }
+        }
+    }
+
+    animateRemoval();
+}
+
+// Transition to Phase 2
+function transitionToPhase2() {
+    console.log('All trash cleaned! Transitioning to Phase 2...');
+    currentPhase = 2;
+
+    // Remove bin and its shadow
+    scene.remove(bin);
+    scene.remove(binShadow);
+
+    // Show tool selection UI
+    document.getElementById('tool-ui').style.display = 'flex';
+    document.getElementById('info').innerHTML = `
+        <h2>Phase 2: Select a Tool</h2>
+        <p>Click a tool below to start cleaning!</p>
+    `;
+}
+
+// Add event listeners for Phase 1
+window.addEventListener('mousemove', onMouseMove);
+window.addEventListener('mousedown', onMouseDown);
+window.addEventListener('mouseup', onMouseUp);
+
+// ========================
+// PHASE 2 - Tool Selection System
+// ========================
+let currentTool = null;
+let activeTool = null; // The 3D tool mesh
+
+// Tool selection handler
+function selectTool(toolName) {
+    currentTool = toolName;
+    console.log(`Selected tool: ${toolName}`);
+
+    // Update UI highlights
+    document.querySelectorAll('.tool-button').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
+
+    // Remove previous tool mesh if exists
+    if (activeTool) {
+        scene.remove(activeTool);
+    }
+
+    // Spawn new tool mesh
+    activeTool = createToolMesh(toolName);
+    scene.add(activeTool);
+
+    // Update info
+    document.getElementById('info').innerHTML = `
+        <h2>Tool: ${toolName}</h2>
+        <p>Move your mouse to position the tool</p>
+        <p style="font-size:10px; margin-top:5px;">Cleaning mechanics coming soon...</p>
+    `;
+}
+
+// Create 3D tool mesh based on type
+function createToolMesh(toolName) {
+    let toolMesh;
+
+    if (toolName === 'Mop') {
+        // Create a simple mop (stick + flat head)
+        const group = new THREE.Group();
+
+        // Stick
+        const stickGeometry = new THREE.CylinderGeometry(0.05, 0.05, 1.5, 8);
+        const stickMaterial = new THREE.MeshStandardMaterial({
+            color: 0x8b4513,
+            roughness: 0.8
+        });
+        const stick = new THREE.Mesh(stickGeometry, stickMaterial);
+        stick.position.y = 0.75;
+        group.add(stick);
+
+        // Mop head
+        const headGeometry = new THREE.BoxGeometry(0.3, 0.1, 0.3);
+        const headMaterial = new THREE.MeshStandardMaterial({
+            color: 0xf0f0f0,
+            roughness: 0.9
+        });
+        const head = new THREE.Mesh(headGeometry, headMaterial);
+        head.position.y = 0;
+        group.add(head);
+
+        toolMesh = group;
+
+    } else if (toolName === 'Sponge') {
+        // Create a sponge (rounded box)
+        const geometry = new THREE.BoxGeometry(0.3, 0.2, 0.4);
+        const material = new THREE.MeshStandardMaterial({
+            color: 0xffeb3b,
+            roughness: 0.9
+        });
+        toolMesh = new THREE.Mesh(geometry, material);
+
+    } else if (toolName === 'Brush') {
+        // Create a brush (handle + bristles)
+        const group = new THREE.Group();
+
+        // Handle
+        const handleGeometry = new THREE.CylinderGeometry(0.04, 0.04, 0.6, 8);
+        const handleMaterial = new THREE.MeshStandardMaterial({
+            color: 0x8b4513,
+            roughness: 0.8
+        });
+        const handle = new THREE.Mesh(handleGeometry, handleMaterial);
+        handle.position.y = 0.3;
+        group.add(handle);
+
+        // Bristles
+        const bristlesGeometry = new THREE.BoxGeometry(0.2, 0.15, 0.2);
+        const bristlesMaterial = new THREE.MeshStandardMaterial({
+            color: 0x4a4a4a,
+            roughness: 0.95
+        });
+        const bristles = new THREE.Mesh(bristlesGeometry, bristlesMaterial);
+        bristles.position.y = 0;
+        group.add(bristles);
+
+        toolMesh = group;
+    }
+
+    toolMesh.castShadow = true;
+    toolMesh.position.set(0, 0.5, 0);
+
+    return toolMesh;
+}
+
+// Make selectTool globally accessible
+window.selectTool = selectTool;
 
 // ========================
 // Animation Loop
